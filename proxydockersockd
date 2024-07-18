@@ -37,7 +37,7 @@ local long_opts = {
 	debug       = "d",
 	user        = "u",
 	docker_sock = 1,
-	to_user     = 1,    -- 1 значит должен быть аргумент у параметра, 0 - не должен
+	to_user     = 1,    -- 1 parameter must have an argument, 0 - should not
 }
 
 local help_txt = [[
@@ -160,7 +160,7 @@ local function deny_from_docker(con, blocked_reason)
 end
 
 local loop = cqueues.new()
-local cons = {} -- коннекты
+local cons = {} -- connections
 
 local function handle_tcp(concli, id, ip, port)
 	local conback = socket.connect({path = optarg['docker_sock']})
@@ -177,7 +177,7 @@ local function handle_tcp(concli, id, ip, port)
 			local chunk, why = concli:recv(-1024)
 			if not chunk then
 				--print("(" .. id .. " concli why) " .. why)
-				if why == EPIPE then -- соединение закрыл client
+				if why == EPIPE then -- connection closed client
 					break
 				else
 					poll(concli, cons[id].condvar,  5)
@@ -203,7 +203,7 @@ local function handle_tcp(concli, id, ip, port)
 			local chunk, why = conback:recv(-1024)
 			if not chunk then
 				--print("(" .. id .. " conback why) " .. why)
-				if why == EPIPE then -- соединение закрыл backend
+				if why == EPIPE then -- connection closed backend
 					break
 				else
 					poll(conback, cons[id].condvar, 5)
@@ -220,12 +220,12 @@ local function handle_tcp(concli, id, ip, port)
 	end)
 	
 	
-	-- ждем событий на сокетах
+	-- waiting for events on the sockets
 	if DEBUG then log.debug("(%d) condvar:wait (concli and conback)", id) end
 	cons[id].condvar:wait()
 	
 	
-	-- ждем когда бекенд завершить передачу данных клиенту
+	-- waiting for the backend to complete the data transfer to the client
 	if (not conback:eof("r")) then
 		if DEBUG then log.debug("(%d) condvar:wait (conback)", id) end
 		cons[id].condvar:wait()
