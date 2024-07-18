@@ -1,0 +1,2 @@
+# Parameters to be passed to proxydockersockd
+#PROXYDOCKERSOCKD_ARGS="-d --docker_sock /tmp/docker.sock"

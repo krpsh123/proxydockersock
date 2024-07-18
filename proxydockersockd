@@ -1,0 +1,293 @@
+#!/usr/bin/env lua
+
+local VERSION = '0.1.0'
+local DEBUG   = false
+
+local function script_path()
+	local str = debug.getinfo(2, "S").source:sub(2)
+	return str:match("(.*/)")
+end
+package.path = package.path .. ';'  .. script_path() ..'lib/?.lua'
+
+local util = require("myutil")
+package.path = package.path .. ';'  .. os.getenv("HOME") .. '/.luarocks/share/lua/'.. util.split(_VERSION, "%s")[2] ..'/?.lua'
+
+local alt_getopt     = require("alt_getopt")
+local posix_pwd      = require("posix.pwd")
+local posix_unistd   = require("posix.unistd")
+local posix_sys_stat = require("posix.sys.stat")
+
+local cqueues   = require("cqueues")
+local socket    = require("cqueues.socket")
+local errno     = require("cqueues.errno")
+local condition = require("cqueues.condition")
+local signal    = require("cqueues.signal")
+
+--local EAGAIN = errno.EAGAIN
+local EPIPE  = errno.EPIPE
+local poll   = cqueues.poll
+
+local log               = require('mylogger')
+--local httprequestparser = require('httprequestparser')
+
+
+local long_opts = {
+	help        = "h",
+	version     = "v",
+	debug       = "d",
+	user        = "u",
+	docker_sock = 1,
+	to_user     = 1,    -- 1 значит должен быть аргумент у параметра, 0 - не должен
+}
+
+local help_txt = [[
+USAGE:
+    this_daemon [OPTION] --to_user user_name
+OPTIONS:
+    -h    print help and exit
+    -v    print version and exit
+    -d    debug mode
+    -u    user_name (default 'prdocker')
+    --docker_sock   path to docker.sock (default '/run/docker.sock')
+    --to_user       user_name
+       A socket is created using a template /run/docker_[%user_name%].sock
+       After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
+]]
+local optarg, _ = alt_getopt.get_opts(arg, "hvdu:", long_opts)
+
+if optarg['d'] then
+	DEBUG = true
+end
+
+if optarg['h'] then
+	print(help_txt)
+	os.exit(0)
+end
+
+if optarg['v'] then
+	print(VERSION)
+	os.exit(0)
+end
+
+if not optarg['to_user'] then
+	log.err("can't find the required option: to_user")
+	os.exit(1)
+end
+local pwd_to_user = posix_pwd.getpwnam(optarg['to_user'])
+if not pwd_to_user then
+	log.err("user '%s' not found", optarg['to_user'])
+	os.exit(1)
+end
+
+if not optarg['u'] then
+	optarg['u'] = 'prdocker'
+end
+local pwd_user = posix_pwd.getpwnam(optarg['u'])
+if not pwd_user then
+	log.err("user '%s' not found", optarg['u'])
+	os.exit(1)
+end
+
+if not optarg['docker_sock'] then
+	optarg['docker_sock'] = '/run/docker.sock'
+end
+local stat_docker_sock, err = posix_sys_stat.stat(optarg['docker_sock'])
+if not stat_docker_sock then
+	log.err("cannot stat %s", err)
+	os.exit(1)
+end
+
+
+log.info("start proxydockersock daemon; version=%s", VERSION)
+
+
+local to_user_sock = '/run/docker_'..optarg["to_user"]..'.sock'
+local srv          = socket.listen({path = to_user_sock, mask = '0117', unlink = true})
+log.info("listen: %s; proxying to %s", to_user_sock, optarg['docker_sock'])
+
+
+local ok, err = posix_unistd.chown(to_user_sock, pwd_user["pw_uid"], pwd_to_user["pw_gid"])
+if not ok then
+	log.err("cannot chown %s", err)
+	os.exit(1)
+end
+
+
+-- let's lower the privileges
+-- we change both (real and effective) identifiers, because that's what the POSIX module in perl does.
+local ok, err = posix_unistd.setpid('g', stat_docker_sock["st_gid"])
+if not ok then
+	log.err("cannot setgid %s", err)
+	os.exit(1)
+end
+local ok, err = posix_unistd.setpid('G', stat_docker_sock["st_gid"])
+if not ok then
+	log.err("cannot setegid %s", err)
+	os.exit(1)
+end
+local ok, err = posix_unistd.setpid('u', pwd_user["pw_uid"])
+if not ok then
+	log.err("cannot setuid %s", err)
+	os.exit(1)
+end
+local ok, err = posix_unistd.setpid('U', pwd_user["pw_uid"])
+if not ok then
+	log.err("cannot seteuid %s", err)
+	os.exit(1)
+end
+
+log.info("setting lower privileges; uid: %s; gid: %s", pwd_user["pw_uid"], stat_docker_sock["st_gid"])
+
+
+-- cd $HOME
+local ok, err = posix_unistd.chdir(pwd_user["pw_dir"])
+if not ok then
+	log.err("cannot chdir %s", err)
+	os.exit(1)
+end
+
+
+local function deny_from_docker(con, blocked_reason)
+	local reason   = blocked_reason or "unknown"
+	local response = '{"message":"authorization denied by proxydockersock: ' .. reason .. '"}\n'
+	
+	con:write("HTTP/1.1 403 Forbidden\r\n")
+	con:write("Content-Type: application/json\r\n")
+	con:write("Content-Length: "..#response.."\r\n")
+	con:write("Server: proxydockersock\r\n")
+	con:write("\r\n")
+	con:write(response)
+end
+
+local loop = cqueues.new()
+local cons = {} -- коннекты
+
+local function handle_tcp(concli, id, ip, port)
+	local conback = socket.connect({path = optarg['docker_sock']})
+	
+	concli:setmode("b", "bn")
+	conback:setmode("b", "bn")
+	
+	loop:wrap(function()
+		if DEBUG then log.debug("(%d) concli_coroutine start", id) end
+		
+		while true do
+			if conback:eof("r") then concli:shutdown('w'); break end
+			
+			local chunk, why = concli:recv(-1024)
+			if not chunk then
+				--print("(" .. id .. " concli why) " .. why)
+				if why == EPIPE then -- соединение закрыл client
+					break
+				else
+					poll(concli, cons[id].condvar,  5)
+				end
+			else
+				--print("(" .. id .. " conback:write) " .. chunk)
+				-- TODO error handling
+				conback:send(chunk, 1, #chunk)
+			end
+		end
+		
+		if cons[id] then cons[id].condvar:signal() end
+		if DEBUG then log.debug("(%d) concli_coroutine stop", id) end
+	end)
+	
+	
+	loop:wrap(function()
+		if DEBUG then log.debug("(%d) conback_coroutine start", id) end
+		
+		while true do
+			if concli:eof("r") then conback:shutdown('w') end
+			
+			local chunk, why = conback:recv(-1024)
+			if not chunk then
+				--print("(" .. id .. " conback why) " .. why)
+				if why == EPIPE then -- соединение закрыл backend
+					break
+				else
+					poll(conback, cons[id].condvar, 5)
+				end
+			else
+				--print("(" .. id .. " concli:write) " .. chunk)
+				-- TODO error handling
+				concli:send(chunk, 1, #chunk)
+			end
+		end
+		
+		if cons[id] then cons[id].condvar:signal() end
+		if DEBUG then log.debug("(%d) conback_coroutine stop", id) end
+	end)
+	
+	
+	-- ждем событий на сокетах
+	if DEBUG then log.debug("(%d) condvar:wait (concli and conback)", id) end
+	cons[id].condvar:wait()
+	
+	
+	-- ждем когда бекенд завершить передачу данных клиенту
+	if (not conback:eof("r")) then
+		if DEBUG then log.debug("(%d) condvar:wait (conback)", id) end
+		cons[id].condvar:wait()
+	end
+	
+	conback:close()
+end
+
+loop:wrap(function()
+	local count = 0
+	
+	for concli in srv:clients() do
+		count = count + 1
+		
+		local id = count
+		cons[id] = {
+			condvar = condition.new(),
+		}
+		
+		loop:wrap(function()
+			local _, ip, port = concli:peername()
+			ip   = ip   or "unix"
+			port = port or 0
+			
+			log.info("(%d) %s:%d: connected", id, ip, port)
+			
+			local ok, why = pcall(handle_tcp, concli, id, ip, port)
+			if ok then
+				log.info("(%d) %s:%d: disconnected", id, ip, port)
+			else
+				log.warn("(%d) %s:%d: %s", id, ip, port, why)
+			end
+			
+			concli:close()
+			cons[id] = nil
+		end)
+	end
+end)
+
+
+local signal_listen = signal.listen(signal.SIGTERM, signal.SIGINT)
+signal.block(signal.SIGTERM, signal.SIGINT)
+loop:wrap(function()
+	local signo
+	while true do
+		signo = signal_listen:wait(0.2)
+		if signo == signal.SIGINT or signo == signal.SIGTERM then
+			log.info('get signal INT or TERM, stop daemon')
+			os.exit(0)
+		end
+	end
+end)
+
+
+while not loop:empty() do
+	local ok, err = loop:step()
+	if not ok then
+		log.err("loop.step: %s", err)
+		
+		-- ERRO; 1721199665; loop.step: ./proxydockersockd:190: socket:accept: Permission denied
+		if string.find(err, 'socket:accept', 1, true) then
+			os.exit(1)
+		end
+	end
+end
