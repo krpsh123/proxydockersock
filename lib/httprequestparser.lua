@@ -1,10 +1,9 @@
+-- original
 -- https://github.com/yogiverma007/httprequestparser
 
 local httprequestparser = {
-    VERSION      = "1.0",
-    dependencies = {'dkjson'}
+    VERSION = "1.0",
 }
-local json = require 'dkjson';
 
 local function isEmpty(s)
     return s == nil or s == '' or s == ""
@@ -34,8 +33,7 @@ local function _privatefindElementFromRequestBody(requestBody, element)
     if s == nil then
         return nil
     end
-    local elementValue = trimString(line:sub(s + 1, string.len(line)))
-    return elementValue
+    return trimString(line:sub(s + 1, string.len(line)))
 end
 
 local function fetchFirstLineFromRequestPayLoad(requestPayload)
@@ -60,15 +58,14 @@ local function fetchRequestBody(requestBody)
     local requestBody = {}
 
     for k, v in pairs(splitRequestBody) do
-        if (v == '\n' or isEmpty(trimString(v))) then
-            flag = true
-        end
         if (flag == true) then
             table.insert(requestBody, v)
         end
+        if (v == '\n' or isEmpty(trimString(v))) then
+            flag = true
+        end
     end
-    requestBody = table.concat(requestBody)
-    return requestBody;
+    return requestBody
 end
 
 --[[
@@ -108,9 +105,9 @@ function httprequestparser.getAllHeaders(requestBodyBuffer)
             else
                 s, e = string.find(v, ':')
                 if s ~= nil then
-                    local headerName = v:sub(1, s)
+                    local headerName = v:sub(1, s - 1)
                     local headerValue = v:sub(s + 1, string.len(v))
-                    requestHeaders[trimString(headerName)] = trimString(headerValue)
+                    requestHeaders[string.lower(trimString(headerName))] = trimString(headerValue)
                 end
             end
         end
@@ -121,6 +118,7 @@ end
 --[[
 -- Will return http method present in Request body.
 -- ]]
+-- https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages
 function httprequestparser.getHttpMethod(requestBodyBuffer)
     local line = fetchFirstLineFromRequestPayLoad(requestBodyBuffer)
     if line == nil then
@@ -133,10 +131,8 @@ function httprequestparser.getHttpMethod(requestBodyBuffer)
     return trimString(line:sub(1, s));
 end
 
---[[
--- Will return request uri present in Request body.
--- ]]
-function httprequestparser.getRequestURI(requestBodyBuffer)
+-- https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages
+function httprequestparser.getURI(requestBodyBuffer)
     local line = fetchFirstLineFromRequestPayLoad(requestBodyBuffer)
     if line == nil then
         return nil
@@ -145,7 +141,32 @@ function httprequestparser.getRequestURI(requestBodyBuffer)
     if s == nil then
         return nil
     end
-    return trimString(line:sub(s + 1, string.len(line)));
+    local uri_and_httpversion = trimString(line:sub(s + 1, string.len(line)));
+
+    s, e = string .find(uri_and_httpversion, '%s')
+    if s == nil then
+        return nil
+    end
+    return trimString(uri_and_httpversion:sub(1, s));
+end
+
+-- https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages
+function httprequestparser.getHttpVersion(requestBodyBuffer)
+    local line = fetchFirstLineFromRequestPayLoad(requestBodyBuffer)
+    if line == nil then
+        return nil
+    end
+    s, e = string .find(line, '%s')
+    if s == nil then
+        return nil
+    end
+    local uri_and_httpversion = trimString(line:sub(s + 1, string.len(line)));
+
+    s, e = string .find(uri_and_httpversion, '%s')
+    if s == nil then
+        return nil
+    end
+    return trimString(uri_and_httpversion:sub(s + 1, string.len(uri_and_httpversion)));
 end
 
 --[[
@@ -155,51 +176,11 @@ function httprequestparser.findElementFromRequestBody(requestBodyBuffer, element
     return _privatefindElementFromRequestBody(requestBodyBuffer, element)
 end
 
-
---[[
--- Will return true or false if request body is json or not.
--- ]]
-function httprequestparser.isJSONBody(requesBodyBuffer)
-    local contentType = httprequestparser.getContentType(requesBodyBuffer)
-    if (string.find(contentType, 'json') ~= nil) then
-        return true
-    else
-        return false
-    end
-end
-
 --[[
 -- Will return request body as String
 -- ]]
 function httprequestparser.getRequestBodyAsString(requestBodyBuffer)
-    local splitRequestBody = splitString(requestBodyBuffer, "\n")
-    local flag = false
-    local requestBody = '';
-
-    for k, v in pairs(splitRequestBody) do
-        if (v == '\n' or isEmpty(trimString(v))) then
-            flag = true
-        end
-        if (flag == true) then
-            requestBody = requestBody .. v
-        end
-    end
-    return requestBody;
-end
-
---[[
--- Will return Json Object if the request body is in Json Format.
--- Users will have to use dkjson function on Json Object.
--- ]]
-function httprequestparser.handleJsonBody(requestBodyBuffer)
-    if (not httprequestparser.isJSONBody(requestBodyBuffer)) then
-        return nil
-    end
-    local requestBody = fetchRequestBody(requestBodyBuffer)
-    if isEmpty(requestBody) then
-        return nil
-    end
-    return json.decode(requestBody)
+    return table.concat(fetchRequestBody(requestBodyBuffer), "\n")
 end
 
 return httprequestparser

@@ -28,7 +28,7 @@ local EPIPE  = errno.EPIPE
 local poll   = cqueues.poll
 
 local log               = require('mylogger')
---local httprequestparser = require('httprequestparser')
+local httprequestparser = require('httprequestparser')
 
 
 local long_opts = {
@@ -162,12 +162,64 @@ end
 local loop = cqueues.new()
 local cons = {} -- connections
 
+local function get_empty_req_client()
+	return {
+		buff     = '',
+		headers  = {},
+		is_ready = false,
+	}
+end
+
+local function make_request(id, chunk)
+	-- is tcp connect
+	if cons[id].is_tcp then
+		cons[id].req_client.buff = chunk
+		return true
+	end
+	
+	-- is new http request?
+	if cons[id].req_client.is_ready then
+		cons[id].req_client = get_empty_req_client()
+	end
+	
+	-- as a rule, all the headlines will fit into the first chunk (see: concli:recv(-1024))
+	if string.len(cons[id].req_client.buff) == 0 then
+		cons[id].req_client.headers = httprequestparser.getAllHeaders(chunk)
+		
+		if cons[id].req_client.headers['upgrade'] ~= nil and string.lower(cons[id].req_client.headers['upgrade']) == 'tcp' then
+			if DEBUG then log.debug("(%d) connnection upgrade tcp", id) end
+			cons[id].is_tcp = true
+		end
+	end
+	
+	-- save request
+	cons[id].req_client.buff = cons[id].req_client.buff .. chunk
+	
+	-- if the "content-length" header are missing or equal to 0, then we assume that the request is completed
+	if cons[id].req_client.headers['content-length'] == nil or tonumber(cons[id].req_client.headers['content-length']) == 0 then
+		cons[id].req_client.is_ready = true
+		--print("("..id .. ")"..util.dumpvar(cons[id].req_client))
+		return true
+	end
+	
+	-- the request is completed
+	if string.len(httprequestparser.getRequestBodyAsString(cons[id].req_client.buff)) == tonumber(cons[id].req_client.headers['content-length']) then
+		cons[id].req_client.is_ready = true
+		--print("("..id .. ")"..util.dumpvar(cons[id].req_client))
+		return true
+	end
+	
+	--print("("..id .. ")".. string.len(httprequestparser.getRequestBodyAsString(cons[id].req_client.buff)) .. " == " .. cons[id].req_client.headers['content-length'])
+	return false
+end
+
 local function handle_tcp(concli, id, ip, port)
 	local conback = socket.connect({path = optarg['docker_sock']})
 	
 	concli:setmode("b", "bn")
 	conback:setmode("b", "bn")
 	
+	-- read concli -> write conback
 	loop:wrap(function()
 		if DEBUG then log.debug("(%d) concli_coroutine start", id) end
 		
@@ -184,8 +236,10 @@ local function handle_tcp(concli, id, ip, port)
 				end
 			else
 				--print("(" .. id .. " conback:write) " .. chunk)
-				-- TODO error handling
-				conback:send(chunk, 1, #chunk)
+				if make_request(id, chunk) then
+					-- TODO error handling
+					conback:send(cons[id].req_client.buff, 1, string.len(cons[id].req_client.buff))
+				end
 			end
 		end
 		
@@ -194,6 +248,7 @@ local function handle_tcp(concli, id, ip, port)
 	end)
 	
 	
+	-- read conback -> write concli
 	loop:wrap(function()
 		if DEBUG then log.debug("(%d) conback_coroutine start", id) end
 		
@@ -242,7 +297,9 @@ loop:wrap(function()
 		
 		local id = count
 		cons[id] = {
-			condvar = condition.new(),
+			condvar    = condition.new(),
+			is_tcp     = false,                 -- do not filter such a connection
+			req_client = get_empty_req_client() -- client request
 		}
 		
 		loop:wrap(function()
