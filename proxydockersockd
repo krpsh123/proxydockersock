@@ -16,6 +16,8 @@ local alt_getopt     = require("alt_getopt")
 local posix_pwd      = require("posix.pwd")
 local posix_unistd   = require("posix.unistd")
 local posix_sys_stat = require("posix.sys.stat")
+local pl_pretty      = require("pl.pretty")
+local dkjson         = require("dkjson")
 
 local cqueues   = require("cqueues")
 local socket    = require("cqueues.socket")
@@ -29,6 +31,7 @@ local poll   = cqueues.poll
 
 local log               = require('mylogger')
 local httprequestparser = require('httprequestparser')
+local config            = require('myconfig')
 
 
 local long_opts = {
@@ -36,8 +39,9 @@ local long_opts = {
 	version     = "v",
 	debug       = "d",
 	user        = "u",
-	docker_sock = 1,
 	to_user     = 1,    -- 1 parameter must have an argument, 0 - should not
+	docker_sock = 1,
+	show_acl    = 0,
 }
 
 local help_txt = [[
@@ -48,10 +52,11 @@ OPTIONS:
     -v    print version and exit
     -d    debug mode
     -u    user_name (default 'prdocker')
-    --docker_sock   path to docker.sock (default '/run/docker.sock')
-    --to_user       user_name
-       A socket is created using a template /run/docker_[%user_name%].sock
-       After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
+    --docker_sock    path to docker.sock (default '/run/docker.sock')
+    --to_user        user_name
+        A socket is created using a template /run/docker_[%user_name%].sock
+        After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
+    --show_acl    show acl for --to_user and exit
 ]]
 local optarg, _ = alt_getopt.get_opts(arg, "hvdu:", long_opts)
 
@@ -95,6 +100,18 @@ local stat_docker_sock, err = posix_sys_stat.stat(optarg['docker_sock'])
 if not stat_docker_sock then
 	log.err("cannot stat %s", err)
 	os.exit(1)
+end
+
+-- acl
+local acl, err = config.parse_acl(optarg['to_user'])
+if not acl then
+	log.err("cannot parse acl file: %s", err)
+	os.exit(1)
+end
+if optarg['show_acl'] then
+	pl_pretty(acl)
+	--print(util.dumpvar(acl))
+	os.exit()
 end
 
 
@@ -147,9 +164,9 @@ if not ok then
 end
 
 
-local function deny_from_docker(con, blocked_reason)
+local function send_deny_to_client(con, blocked_reason)
 	local reason   = blocked_reason or "unknown"
-	local response = '{"message":"authorization denied by proxydockersock: ' .. reason .. '"}\n'
+	local response = '{"message":"denied by proxydockersock: ' .. reason .. '"}\n'
 	
 	con:write("HTTP/1.1 403 Forbidden\r\n")
 	con:write("Content-Type: application/json\r\n")
@@ -167,7 +184,37 @@ local function get_empty_req_client()
 		buff     = '',
 		headers  = {},
 		is_ready = false,
+		method   = '',
+		uri      = '',
 	}
+end
+
+local function check_acl(id, acl)
+	-- is tcp connect
+	if cons[id].is_tcp then
+		return true
+	end
+	--print(cons[id].req_client.method .. " " .. cons[id].req_client.uri)
+	
+	
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/create") then
+		local prf = 'container create'
+		
+		if not acl.containers.create.allow then
+			return nil, prf
+		end
+		
+		local req_json = dkjson.decode(httprequestparser.getRequestBodyAsString(cons[id].req_client.buff))
+		
+		if not acl.containers.create.json.HostConfig.Privileged then
+			if req_json.HostConfig ~= nil and req_json.HostConfig.Privileged then
+				return nil, prf..": --privileged"
+			end
+		end
+	end
+	
+	
+	return true
 end
 
 local function make_request(id, chunk)
@@ -185,6 +232,8 @@ local function make_request(id, chunk)
 	-- as a rule, all the headlines will fit into the first chunk (see: concli:recv(-1024))
 	if string.len(cons[id].req_client.buff) == 0 then
 		cons[id].req_client.headers = httprequestparser.getAllHeaders(chunk)
+		cons[id].req_client.uri     = httprequestparser.getURI(chunk)
+		cons[id].req_client.method  = httprequestparser.getHttpMethod(chunk)
 		
 		if cons[id].req_client.headers['upgrade'] ~= nil and string.lower(cons[id].req_client.headers['upgrade']) == 'tcp' then
 			if DEBUG then log.debug("(%d) connnection upgrade tcp", id) end
@@ -237,8 +286,15 @@ local function handle_tcp(concli, id, ip, port)
 			else
 				--print("(" .. id .. " conback:write) " .. chunk)
 				if make_request(id, chunk) then
-					-- TODO error handling
-					conback:send(cons[id].req_client.buff, 1, string.len(cons[id].req_client.buff))
+					local ok, err = check_acl(id, acl)
+					if ok then
+						--add_owner_label(id)
+						
+						-- TODO error handling
+						conback:send(cons[id].req_client.buff, 1, string.len(cons[id].req_client.buff))
+					else
+						send_deny_to_client(concli, err)
+					end
 				end
 			end
 		end

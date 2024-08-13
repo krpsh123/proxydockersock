@@ -18,10 +18,11 @@ OPTIONS:
     -v    print version and exit
     -d    debug mode
     -u    user_name (default 'prdocker')
-    --docker_sock   path to docker.sock (default '/run/docker.sock')
-    --to_user       user_name
-       A socket is created using a template /run/docker_[%user_name%].sock
-       After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
+    --docker_sock    path to docker.sock (default '/run/docker.sock')
+    --to_user        user_name
+        A socket is created using a template /run/docker_[%user_name%].sock
+        After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
+    --show_acl    show acl for --to_user and exit
 ```
 
 # Install
@@ -30,7 +31,7 @@ OPTIONS:
 
 installing dependencies
 ```sh
-apt install lua5.3 lua-cqueues lua-posix
+apt install lua5.3 lua-cqueues lua-posix lua-penlight lua-dkjson
 ```
 
 creating a user from whom the daemon will work
@@ -69,4 +70,5 @@ export DOCKER_HOST=unix:///run/docker_larry.sock && docker ps
 ```
 
 # TODO
-Creating http protocol filtering to limit user actions with containers.
+1. Http filtering extension to limit user actions with containers.
+2. Creating a label (proxydockersock.owner=%user_name%) when creating a container, volume, network, or image.

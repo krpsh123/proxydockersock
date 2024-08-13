@@ -1,0 +1,16 @@
+# Based off https://docs.docker.com/engine/api/v1.46/
+
+# Each user has a default acl. You can view it like this:
+# proxydockersockd --to_user pasha --show_acl
+#
+# The final acl for the user is formed by merging the default acl and the %user_name% section from this file. You can view it like this:
+# proxydockersockd --to_user pasha --show_acl
+
+#users:
+#  larry:
+#    containers:
+#      create:
+#        json:
+#          HostConfig:
+#            # --privileged
+#            Privileged: true

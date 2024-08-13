@@ -18,8 +18,8 @@ function M.dumpvar(data)
 				tablecache[str] = (tablecache[str] or 0) + 1
 				buffer = buffer.."("..str..") {\n"
 				for k, v in pairs(d) do
-				     buffer = buffer..string.rep(padder, depth+1).."["..k.."] => "
-				     _dumpvar(v, depth+1)
+					buffer = buffer..string.rep(padder, depth+1).."["..k.."] => "
+					_dumpvar(v, depth+1)
 				end
 				buffer = buffer..string.rep(padder, depth).."}\n"
 			end
@@ -41,5 +41,39 @@ function M.split(str, sep)
 	end
 	return result
 end
+
+function M.ltrim(str)
+  return string.match(str, "^%s*(.-)$")
+end
+
+function M.rtrim(str)
+  return string.match(str, "^(.-)%s*$")
+end
+
+function M.trim(str)
+  return string.match(str, "^%s*(.-)%s*$")
+end
+
+function M.script_path()
+	local str = debug.getinfo(2, "S").source:sub(2)
+	return str:match("(.*/)")
+end
+
+-- https://stackoverflow.com/questions/1283388/how-to-merge-two-tables-overwriting-the-elements-which-are-in-both
+function M.table_merge(t1, t2)
+	for k,v in pairs(t2) do
+		if type(v) == "table" then
+			if type(t1[k] or false) == "table" then
+				M.table_merge(t1[k] or {}, t2[k] or {})
+			else
+				t1[k] = v
+			end
+		else
+			t1[k] = v
+		end
+	end
+	return t1
+end
+
 
 return M
