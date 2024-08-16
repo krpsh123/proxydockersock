@@ -23,6 +23,7 @@ OPTIONS:
         A socket is created using a template /run/docker_[%user_name%].sock
         After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
     --show_acl             show acl for --to_user and exit
+    --no_acl               disable acl
     --no_add_all_labels    tell this_daemon not to add any of his own labels.
         By default, labels are added when creating a container, image, volume, or network.
 ```

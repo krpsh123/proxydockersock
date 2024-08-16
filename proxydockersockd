@@ -47,6 +47,7 @@ local long_opts = {
 	to_user     = 1,    -- 1 parameter must have an argument, 0 - should not
 	docker_sock = 1,
 	show_acl    = 0,
+	no_acl      = 0,
 	no_add_all_labels = 0,
 }
 
@@ -63,6 +64,7 @@ OPTIONS:
         A socket is created using a template /run/docker_[%user_name%].sock
         After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
     --show_acl             show acl for --to_user and exit
+    --no_acl               disable acl
     --no_add_all_labels    tell this_daemon not to add any of his own labels.
         By default, labels are added when creating a container, image, volume, or network.
 ]]
@@ -338,10 +340,10 @@ local function check_acl(id, acl)
 		return true
 	end
 	
-	-- disabled acl
-	--if optarg["no_acl"] then
-	--	return true
-	--end
+	-- disable acl
+	if optarg["no_acl"] then
+		return true
+	end
 	--print(util.dumpvar(cons[id].req_client))
 	
 	
