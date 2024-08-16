@@ -22,7 +22,9 @@ OPTIONS:
     --to_user        user_name
         A socket is created using a template /run/docker_[%user_name%].sock
         After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
-    --show_acl    show acl for --to_user and exit
+    --show_acl             show acl for --to_user and exit
+    --no_add_all_labels    tell this_daemon not to add any of his own labels.
+        By default, labels are added when creating a container, image, volume, or network.
 ```
 
 # Install
@@ -31,7 +33,7 @@ OPTIONS:
 
 installing dependencies
 ```sh
-apt install lua5.3 lua-cqueues lua-posix lua-penlight lua-dkjson
+apt install lua5.3 lua-cqueues lua-posix lua-penlight lua-dkjson lua-http
 ```
 
 creating a user from whom the daemon will work
@@ -71,4 +73,4 @@ export DOCKER_HOST=unix:///run/docker_larry.sock && docker ps
 
 # TODO
 1. Http filtering extension to limit user actions with containers.
-2. Creating a label (proxydockersock.owner=%user_name%) when creating a container, volume, network, or image.
+2. Creating a label (krpsh123.proxydockersock.owner=%user_name%) when creating a volume, network, or image.

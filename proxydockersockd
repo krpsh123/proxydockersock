@@ -16,8 +16,13 @@ local alt_getopt     = require("alt_getopt")
 local posix_pwd      = require("posix.pwd")
 local posix_unistd   = require("posix.unistd")
 local posix_sys_stat = require("posix.sys.stat")
-local pl_pretty      = require("pl.pretty")
 local dkjson         = require("dkjson")
+local http_util      = require("http.util")
+
+local pl_pretty  = require("pl.pretty")
+local pl_types   = require("pl.types")
+local pl_stringx = require("pl.stringx")
+local pl_tablex  = require("pl.tablex")
 
 local cqueues   = require("cqueues")
 local socket    = require("cqueues.socket")
@@ -42,6 +47,7 @@ local long_opts = {
 	to_user     = 1,    -- 1 parameter must have an argument, 0 - should not
 	docker_sock = 1,
 	show_acl    = 0,
+	no_add_all_labels = 0,
 }
 
 local help_txt = [[
@@ -56,7 +62,9 @@ OPTIONS:
     --to_user        user_name
         A socket is created using a template /run/docker_[%user_name%].sock
         After starting this daemon, you need to add 'export DOCKER_HOST=unix:///run/docker_[%user_name%].sock' in ~/.bashrc
-    --show_acl    show acl for --to_user and exit
+    --show_acl             show acl for --to_user and exit
+    --no_add_all_labels    tell this_daemon not to add any of his own labels.
+        By default, labels are added when creating a container, image, volume, or network.
 ]]
 local optarg, _ = alt_getopt.get_opts(arg, "hvdu:", long_opts)
 
@@ -178,6 +186,7 @@ end
 
 local loop = cqueues.new()
 local cons = {} -- connections
+local docker_label_owner = {['krpsh123.proxydockersock.owner'] = optarg["to_user"]}
 
 local function get_empty_req_client()
 	return {
@@ -186,7 +195,141 @@ local function get_empty_req_client()
 		is_ready = false,
 		method   = '',
 		uri      = '',
+		uri_long = '',
+		params   = {},
+		http_version = '',
 	}
+end
+
+local function change_request(id, new_body)
+	-- https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages
+	
+	local new_buff = {}
+	
+	-- request line
+	local req_line = cons[id].req_client.method
+	if pl_types.is_empty(cons[id].req_client.params) then
+		req_line = req_line .. " " .. cons[id].req_client.uri_long
+	else
+		local params_str = http_util.dict_to_query(cons[id].req_client.params)
+		-- dict_to_query does it itself encoded
+		req_line = req_line .. " " .. cons[id].req_client.uri.."?"..params_str
+	end
+	req_line = req_line .. " " .. cons[id].req_client.http_version.."\r\n"
+	table.insert(new_buff, req_line)
+	
+	
+	-- headers
+	for k,v in pairs(cons[id].req_client.headers) do
+		if k == 'content-length' then
+			v = string.len(new_body)
+		end
+		table.insert(new_buff,k..": "..v.."\r\n")
+	end
+	
+	
+	-- empty line
+	table.insert(new_buff, "\r\n")
+	
+	
+	-- body
+	if not pl_types.is_empty(new_body) then
+		table.insert(new_buff, new_body)
+	end
+	
+	--print("=====================")
+	--print(cons[id].req_client.buff)
+	--print("=====================")
+	--print(table.concat(new_buff))
+	--print("=====================")
+	
+	cons[id].req_client.buff = table.concat(new_buff)
+	return true
+end
+
+local function add_owner_label(id)
+	-- is tcp connect
+	if cons[id].is_tcp then
+		return true
+	end
+	
+	-- disabled added all labels
+	if optarg["no_add_all_labels"] then
+		return true
+	end
+	--print(cons[id].req_client.method .. " " .. cons[id].req_client.uri)
+	
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/create") then
+		local prf = 'containers/create'
+		
+		local req_json = dkjson.decode(httprequestparser.getRequestBodyAsString(cons[id].req_client.buff))
+		--print(util.dumpvar(req_json))
+		
+		if pl_types.is_empty(req_json.Labels) then
+			req_json.Labels = docker_label_owner
+		else
+			for k,v in pairs(docker_label_owner) do
+				req_json.Labels[k] = v
+			end
+		end
+		
+		change_request(id, dkjson.encode(req_json))
+		
+		if DEBUG then log.debug("(%d) %s; add_owner_label: %s", id, prf, dkjson.encode(add_label)) end
+		return true
+	end
+	
+	
+	return true
+end
+
+local function filtered_owner(id)
+	-- is tcp connect
+	if cons[id].is_tcp then
+		return true
+	end
+	
+	-- disabled added all labels
+	if optarg["no_add_all_labels"] then
+		return true
+	end
+	--print(cons[id].req_client.method .. " " .. cons[id].req_client.uri_long)
+	
+	local function _get_filters()
+		local docker_owner_label_for_filters = {};
+		for k,v in pairs(docker_label_owner) do
+			docker_owner_label_for_filters[k.."="..v] = true
+		end
+		
+		local filters = {}
+		if pl_types.is_empty(cons[id].req_client.params.filters) then
+			filters = {label = docker_owner_label_for_filters}
+		else
+			filters = dkjson.decode(cons[id].req_client.params.filters)
+			--print(util.dumpvar(filters))
+			if pl_types.is_empty(filters.label) then
+				filters.label = docker_owner_label_for_filters
+			else
+				filters.label = pl_tablex.merge(filters.label, docker_owner_label_for_filters, true)
+			end
+		end
+		
+		if DEBUG then log.debug("(%d) %s; added query params: filters->label: %s", id, prf, dkjson.encode(docker_owner_label_for_filters)) end
+		return filters
+	end
+	
+	
+	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/json") then
+		local prf = 'containers/json'
+		
+		cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
+		change_request(id, "")
+		
+		return true
+	end
+	
+	
+	return true
 end
 
 local function check_acl(id, acl)
@@ -194,11 +337,16 @@ local function check_acl(id, acl)
 	if cons[id].is_tcp then
 		return true
 	end
-	--print(cons[id].req_client.method .. " " .. cons[id].req_client.uri)
+	
+	-- disabled acl
+	--if optarg["no_acl"] then
+	--	return true
+	--end
+	--print(util.dumpvar(cons[id].req_client))
 	
 	
 	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/create") then
-		local prf = 'container create'
+		local prf = 'containers/create'
 		
 		if not acl.containers.create.allow then
 			return nil, prf
@@ -231,9 +379,19 @@ local function make_request(id, chunk)
 	
 	-- as a rule, all the headlines will fit into the first chunk (see: concli:recv(-1024))
 	if string.len(cons[id].req_client.buff) == 0 then
-		cons[id].req_client.headers = httprequestparser.getAllHeaders(chunk)
-		cons[id].req_client.uri     = httprequestparser.getURI(chunk)
-		cons[id].req_client.method  = httprequestparser.getHttpMethod(chunk)
+		cons[id].req_client.headers      = httprequestparser.getAllHeaders(chunk)
+		cons[id].req_client.method       = httprequestparser.getHttpMethod(chunk)
+		cons[id].req_client.http_version = httprequestparser.getHttpVersion(chunk)
+		cons[id].req_client.uri_long     = http_util.decodeURIComponent(httprequestparser.getURI(chunk))
+		
+		local tt = pl_stringx.split(cons[id].req_client.uri_long, '?', 2)
+		cons[id].req_client.uri = tt[1]
+		if not pl_types.is_empty(tt[2]) then
+			for k, v in http_util.query_args(tt[2]) do
+				cons[id].req_client.params[k] = v
+			end
+		end
+		
 		
 		if cons[id].req_client.headers['upgrade'] ~= nil and string.lower(cons[id].req_client.headers['upgrade']) == 'tcp' then
 			if DEBUG then log.debug("(%d) connnection upgrade tcp", id) end
@@ -288,7 +446,9 @@ local function handle_tcp(concli, id, ip, port)
 				if make_request(id, chunk) then
 					local ok, err = check_acl(id, acl)
 					if ok then
-						--add_owner_label(id)
+						add_owner_label(id)
+						
+						filtered_owner(id)
 						
 						-- TODO error handling
 						conback:send(cons[id].req_client.buff, 1, string.len(cons[id].req_client.buff))
