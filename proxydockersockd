@@ -340,6 +340,11 @@ local function filtered_owner(id)
 		change_request(id, "")
 		return true
 	end
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/prune") then
+		cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
+		change_request(id, "")
+		return true
+	end
 	
 	
 	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes") then
@@ -349,6 +354,11 @@ local function filtered_owner(id)
 		end
 		return true
 	end
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes/prune") then
+		cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
+		change_request(id, "")
+		return true
+	end
 	
 	
 	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/networks") then
@@ -356,6 +366,11 @@ local function filtered_owner(id)
 			cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
 			change_request(id, "")
 		end
+		return true
+	end
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/networks/prune") then
+		cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
+		change_request(id, "")
 		return true
 	end
 	
