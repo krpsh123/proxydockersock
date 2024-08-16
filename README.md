@@ -25,7 +25,7 @@ OPTIONS:
     --show_acl             show acl for --to_user and exit
     --no_acl               disable acl
     --no_add_all_labels    tell this_daemon not to add any of his own labels.
-        By default, labels are added when creating a container, image, volume, or network.
+        By default, labels are added when creating a container, volume, or network.
 ```
 
 # Install
@@ -74,4 +74,4 @@ export DOCKER_HOST=unix:///run/docker_larry.sock && docker ps
 
 # TODO
 1. Http filtering extension to limit user actions with containers.
-2. Creating a label (krpsh123.proxydockersock.owner=%user_name%) when creating a image.
+2. Adding a label (krpsh123.proxydockersock.owner=%user_name%) when creating a images?

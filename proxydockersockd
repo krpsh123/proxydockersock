@@ -66,7 +66,7 @@ OPTIONS:
     --show_acl             show acl for --to_user and exit
     --no_acl               disable acl
     --no_add_all_labels    tell this_daemon not to add any of his own labels.
-        By default, labels are added when creating a container, image, volume, or network.
+        By default, labels are added when creating a container, volume, or network.
 ]]
 local optarg, _ = alt_getopt.get_opts(arg, "hvdu:", long_opts)
 
