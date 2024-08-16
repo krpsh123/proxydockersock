@@ -261,9 +261,7 @@ local function add_owner_label(id)
 	end
 	--print(cons[id].req_client.method .. " " .. cons[id].req_client.uri)
 	
-	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/create") then
-		local prf = 'containers/create'
-		
+	local function _add_label()
 		local req_json = dkjson.decode(httprequestparser.getRequestBodyAsString(cons[id].req_client.buff))
 		--print(util.dumpvar(req_json))
 		
@@ -275,9 +273,19 @@ local function add_owner_label(id)
 			end
 		end
 		
-		change_request(id, dkjson.encode(req_json))
-		
-		if DEBUG then log.debug("(%d) %s; add_owner_label: %s", id, prf, dkjson.encode(add_label)) end
+		if DEBUG then log.debug("(%d) %s; add_owner_label: %s", id, cons[id].req_client.uri, dkjson.encode(docker_label_owner)) end
+		return req_json
+	end
+	
+	
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/create") then
+		change_request(id, dkjson.encode(_add_label()))
+		return true
+	end
+	
+	
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes/create") then
+		change_request(id, dkjson.encode(_add_label()))
 		return true
 	end
 	
@@ -316,17 +324,23 @@ local function filtered_owner(id)
 			end
 		end
 		
-		if DEBUG then log.debug("(%d) %s; added query params: filters->label: %s", id, prf, dkjson.encode(docker_owner_label_for_filters)) end
+		if DEBUG then log.debug("(%d) %s; added query params: filters->label: %s", id, cons[id].req_client.uri, dkjson.encode(docker_owner_label_for_filters)) end
 		return filters
 	end
 	
 	
 	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/containers/json") then
-		local prf = 'containers/json'
-		
 		cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
 		change_request(id, "")
-		
+		return true
+	end
+	
+	
+	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes") then
+		if not string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes/.+") then -- docker volume inspect
+			cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
+			change_request(id, "")
+		end
 		return true
 	end
 	
