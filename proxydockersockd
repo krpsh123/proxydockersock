@@ -290,6 +290,12 @@ local function add_owner_label(id)
 	end
 	
 	
+	if cons[id].req_client.method == 'POST' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/networks/create") then
+		change_request(id, dkjson.encode(_add_label()))
+		return true
+	end
+	
+	
 	return true
 end
 
@@ -338,6 +344,15 @@ local function filtered_owner(id)
 	
 	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes") then
 		if not string.find(cons[id].req_client.uri, "^/v[%.%d]+/volumes/.+") then -- docker volume inspect
+			cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
+			change_request(id, "")
+		end
+		return true
+	end
+	
+	
+	if cons[id].req_client.method == 'GET' and string.find(cons[id].req_client.uri, "^/v[%.%d]+/networks") then
+		if not string.find(cons[id].req_client.uri, "^/v[%.%d]+/networks/.+") then -- docker network inspect
 			cons[id].req_client.params["filters"] = dkjson.encode(_get_filters())
 			change_request(id, "")
 		end

@@ -74,4 +74,4 @@ export DOCKER_HOST=unix:///run/docker_larry.sock && docker ps
 
 # TODO
 1. Http filtering extension to limit user actions with containers.
-2. Creating a label (krpsh123.proxydockersock.owner=%user_name%) when creating a network, or image.
+2. Creating a label (krpsh123.proxydockersock.owner=%user_name%) when creating a image.
